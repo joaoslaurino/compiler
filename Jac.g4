@@ -210,11 +210,12 @@ st_attrib: NAME ATTRIB expression
             symbol_table.append($NAME.text)
             symbol_type.append($expression.type)
             used_table.append(False)
+
         if $expression.type == 'i':
             emit('    istore ' +  str(symbol_table.index($NAME.text)), +1)
         elif $expression.type == 's':
             emit('    astore ' +  str(symbol_table.index($NAME.text)), +1)
-        else:
+        else:   
             sys.stderr.write('*HELP NAME ATTRIB*')
             exit(1)
     }

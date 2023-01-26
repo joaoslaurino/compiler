@@ -584,11 +584,12 @@ public class JacParser extends Parser {
 			            symbol_table.append((((St_attribContext)_localctx).NAME!=null?((St_attribContext)_localctx).NAME.getText():null))
 			            symbol_type.append(((St_attribContext)_localctx).expression.type)
 			            used_table.append(False)
+
 			        if ((St_attribContext)_localctx).expression.type == 'i':
 			            emit('    istore ' +  str(symbol_table.index((((St_attribContext)_localctx).NAME!=null?((St_attribContext)_localctx).NAME.getText():null))), +1)
 			        elif ((St_attribContext)_localctx).expression.type == 's':
 			            emit('    astore ' +  str(symbol_table.index((((St_attribContext)_localctx).NAME!=null?((St_attribContext)_localctx).NAME.getText():null))), +1)
-			        else:
+			        else:   
 			            sys.stderr.write('*HELP NAME ATTRIB*')
 			            exit(1)
 			    
