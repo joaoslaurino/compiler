@@ -37,11 +37,21 @@ type_table = []
 used_table = []
 inside_while = []
 declared_table = []
+function_table = []
+param_table = []
+
 
 stack_cur = 0 
 stack_max = 0
 if_max = 1
 while_max = 1
+arg_max = 0
+
+has_error = False
+function_error = False
+has_return = False
+
+type = 'V'
 
 def emit(bytecode, delta):
     global stack_cur, stack_max
@@ -54,12 +64,21 @@ def if_counter():
     global if_max
     if_max += 1
 
-def resetcounters():
-    global stack_cur, stack_max, if_max, while_max
+def reset_counters():
+    global stack_cur, stack_max, if_max, while_max, symbol_table, symbol_type, used_table, has_return, type
     stack_cur = 0
     stack_max = 0
+    symbol_table = []
+    symbol_type = []
+    used_table = []
+    has_return = False
+    type = 'V'
     if_max = 1
     while_max = 1
+
+def update_error():
+    global has_error
+    has_error = True
 
 }
 
@@ -67,6 +86,7 @@ def resetcounters():
 tokens { INDENT, DEDENT }
 
 IF       : 'if'       ;
+ELSE     : 'else'     ;
 WHILE    : 'while'    ;
 BREAK    : 'break'    ;
 CONTINUE : 'continue' ;
@@ -74,6 +94,8 @@ PRINT    : 'print'    ;
 READINT  : 'readint'  ;
 READSTR  : 'readstr'  ;
 DEF      : 'def'      ;
+INT      : 'int'      ;
+RETURN   : 'return'   ;
 
 PLUS  : '+' ;
 MINUS : '-' ;
@@ -130,6 +152,7 @@ main:
     }
     ( statement )+
     {if 1:
+        global has_error
         print('    return')
         if (len(symbol_table) > 0):
             print('.limit locals ' + str(len(symbol_table)))
@@ -138,33 +161,72 @@ main:
         print('\n; symbol_table:', symbol_table)
         print('; symbol_type:', symbol_type)
         print('; used_table:', used_table)
+        if has_error == True:
+            exit(1)
         if (False in used_table):
             sys.stderr.write('Warning: unused variables: ' + str([symbol_table[i] for i in range(len(used_table)) if not used_table[i]]) + '\n')        
     }
     ;
 
-function: DEF NAME OP_PAR CL_PAR COLON
+function: DEF NAME OP_PAR ( parameters )? CL_PAR COLON 
     {if 1:
-        if $NAME.text not in declared_table:
-            declared_table.append($NAME.text)
-        else:
-            sys.stderr.write('Error: function ' + $NAME.text + ' already declared\n')
-            exit(1)
-
-        print('.method public static ' + $NAME.text + '()V')
+        global type, function_table, param_table, symbol_table, has_return
     }
-    INDENT ( statement )+ DEDENT
+    (INT
     {if 1:
-        print('    return')
+        type = 'I'
+    }
+    )?
+    INDENT *
+    {if 1:
+        I = ''
+        for j in range(0, len(symbol_table)):
+            I = I + 'I'
+        param_table.append(len(symbol_table))
+        if $NAME.text+type not in function_table:
+            print('.method public static ' + $NAME.text + '(' + I + ')' + type)
+            function_table.append($NAME.text + type)
+        else:
+            sys.stderr.write('Error in function: "' + $NAME.text + '" is already declared\n')
+            update_error()
+    }
+    ( statement )* DEDENT *
+    {if 1:
+        #sys.stderr.write('Type = ' + str(type) + '\n')
+        #sys.stderr.write('has_return = ' + str(has_return) + '\n')
+        if type == 'I' and has_return == False:
+            sys.stderr.write('Error in function: "' + $NAME.text + '" must return a integer value\n')
+            update_error()
+        print('return')
         if (len(symbol_table) > 0):
             print('.limit locals ' + str(len(symbol_table)))
         print('.limit stack ' + str(stack_max))
-        print('.end method')
-        resetcounters()
+        print('.end method\n')
+        reset_counters()
     }
     ;
 
-statement: st_print | st_attrib | st_if | st_while | st_break | st_continue | st_call | NL
+parameters: 
+   NAME
+    {if 1:
+        symbol_table.append($NAME.text)
+        used_table.append(False)
+        symbol_type.append('i')
+    } 
+    ( COMMA NAME
+    {if 1:
+        if $NAME.text in symbol_table:
+            sys.stderr.write('Error in parameter: names must be unique\n')
+            update_error()
+        else:
+            symbol_table.append($NAME.text)
+            used_table.append(False)
+            symbol_type.append('i')
+    }
+    )*
+    ;       
+
+statement: st_print | st_attrib | st_if | st_while | st_break | st_continue | st_call | st_return | NL
     ;
 
 st_print:
@@ -210,29 +272,65 @@ st_attrib: NAME ATTRIB expression
             symbol_table.append($NAME.text)
             symbol_type.append($expression.type)
             used_table.append(False)
-
-        if $expression.type == 'i':
-            emit('    istore ' +  str(symbol_table.index($NAME.text)), +1)
-        elif $expression.type == 's':
-            emit('    astore ' +  str(symbol_table.index($NAME.text)), +1)
-        else:   
-            sys.stderr.write('*HELP NAME ATTRIB*')
-            exit(1)
+        if symbol_type[symbol_table.index($NAME.text)] == 'i':
+            if symbol_type[symbol_table.index($NAME.text)] != $expression.type:
+                sys.stderr.write('Error in attribution: integer variable "' + $NAME.text + '" must receive a integer expression\n')
+                update_error()
+            elif $expression.type == 'error' or $expression.type == 's':
+                sys.stderr.write('Error in attribution: integer variable "' + $NAME.text + '" cannot receive a string expression\n')
+                update_error()
+            elif $expression.type == 'i':
+                emit('    istore ' +  str(symbol_table.index($NAME.text)), -1)
+            else:
+                sys.stderr.write('Error in expression: invalid type of expression\n')
+                update_error()
+        elif symbol_type[symbol_table.index($NAME.text)] == 's':
+            if symbol_type[symbol_table.index($NAME.text)] != $expression.type:
+                sys.stderr.write('Error in attribution: string variable "' + $NAME.text + '" must receive a string expression\n')
+                update_error()
+            elif $expression.type == 'error' or $expression.type == 'i':
+                sys.stderr.write('Error in attribution: string variable "' + $NAME.text + '" cannot receive a integer expression\n')
+                update_error()
+            elif $expression.type == 's':
+                emit('    astore ' +  str(symbol_table.index($NAME.text)), -1)
+            else:
+                sys.stderr.write('Error in expression: invalid type of expression\n')
+                update_error()
+        elif symbol_type[symbol_table.index($NAME.text)] == 'void':
+            sys.stderr.write('Error in atribuition: a void function does not return a value\n')
+            update_error()
+        else:
+            sys.stderr.write('Error in expression: invalid type of token\n')
+            update_error()
     }
     ;
+
 
 st_if: IF cmp = comparison_if COLON 
     {if 1:
         global if_max
-        emit($cmp.type + '  NOT_IF_' + str(if_max), -2)
+        has_else = False
+        emit($cmp.type + ' NOT_IF_' + str(if_max), -2)
         local_if = if_max
         if_max += 1
     }
-    INDENT ( statement )+ DEDENT
+    INDENT ( statement )+
+    (DEDENT ELSE COLON INDENT
     {if 1:
+        has_else = True
+        print('goto END_ELSE_' + str(local_if))
         print('NOT_IF_' + str(local_if) + ':')
         if_counter()
     }
+    ( statement )+ )?
+    {if 1:
+        if has_else:
+            print('END_ELSE_' + str(local_if) + ':')
+        else:
+            print('NOT_IF_' + str(local_if) + ':')
+        if_counter()
+    }
+    DEDENT
     ;
 
 st_break: BREAK
@@ -272,15 +370,79 @@ st_while: WHILE
     }
     ;
 
-st_call: NAME OP_PAR CL_PAR
+st_call: NAME OP_PAR ( arguments )? CL_PAR
     {if 1:
-        print('    invokestatic Test/' + $NAME.text + '()V')
+        global function_table, arg_max, function_error, has_return
+        I = ''
+        if $NAME.text+'I' in function_table or $NAME.text+'V' in function_table :
+            if $NAME.text+'I' in function_table:
+                currentType = 'I'
+            else:
+                currentType = 'V'
+            if function_error == True:
+                if currentType == 'I':
+                    sys.stderr.write('Error in function call: function "' + $NAME.text + '" needs to return a value\n')
+                else:
+                    sys.stderr.write('Error in function call: all arguments must be integer\n')
+                update_error()
+            if param_table[function_table.index($NAME.text+currentType)] != arg_max:
+                sys.stderr.write('Error in function call: wrong number of arguments\n')
+                update_error()
+
+            for j in range(0, arg_max):
+                I += 'I'
+            print('    invokestatic Test/' + $NAME.text + '(' + I + ')' + currentType)
+        else:
+            sys.stderr.write('Error in function call: function "' + $NAME.text + '" not declared\n')
+            update_error()
+        arg_max = 0
     }
     ;
 
-
-comparison_if returns [type]: expression op = ( EQ | NE | GT | GE | LT | LE ) expression
+st_return: RETURN e = expression
     {if 1:
+        global has_return
+        if function_table[len(function_table)-1].endswith('V'):
+            sys.stderr.write('Error in return: void function cannot return a value\n')
+            update_error()
+        else:
+            if $e.type == 'i':
+                print('    ireturn')
+            else:
+                sys.stderr.write('Error in return: function must return an integer value\n')
+                update_error()
+            has_return = True    
+    }
+    ;
+
+arguments: 
+    {if 1:
+        global arg_max, function_error
+        arg_max = 0
+    }
+    e1 = expression
+    {if 1:
+        arg_max += 1
+        if $e1.type != 'i':
+            update_error()
+            function_error = True
+    }
+    ( COMMA e2 = expression
+    {if 1:
+        arg_max += 1
+        if $e2.type != 'i':
+            function_error = True
+            update_error()
+    }
+    )*
+    ;
+
+
+comparison_if returns [type]: e1 = expression op = ( EQ | NE | GT | GE | LT | LE ) e2 = expression
+    {if 1:
+        if $e1.type != $e2.type:
+            sys.stderr.write('Error in comparison: operator cannot use string type\n')
+            update_error()
         if $op.type == JacParser.EQ:
             $type = 'if_icmpne'
         elif $op.type == JacParser.NE:
@@ -296,8 +458,11 @@ comparison_if returns [type]: expression op = ( EQ | NE | GT | GE | LT | LE ) ex
     }
     ;
 
-comparison_while: expression op = ( EQ | NE | GT | GE | LT | LE ) expression
+comparison_while: e1 = expression op = ( EQ | NE | GT | GE | LT | LE ) e2 = expression
     {if 1:
+        if $e1.type != $e2.type:
+            sys.stderr.write('Error in comparison: operator cannot use string type\n')
+            update_error()
         if $op.type == JacParser.EQ:
             emit('if_icmpne END_WHILE_'+str(while_max), -2)
         elif $op.type == JacParser.NE:
@@ -314,10 +479,13 @@ comparison_while: expression op = ( EQ | NE | GT | GE | LT | LE ) expression
     ;
 
 expression returns [type]: t1 = term ( op = ( PLUS | MINUS ) t2 = term
-    {if 1:
+    {if 1: 
+        if $t1.type != $t2.type or $t1.type != 'i' or $t2.type != 'i':
+            sys.stderr.write('Error in expression: operator cannot combine different types\n')
+            update_error()
         if $op.type == JacParser.PLUS:
             emit('    iadd', -1)
-        else:
+        if $op.type == JacParser.MINUS:
             emit('    isub', -1)
     }
     )*
@@ -328,12 +496,16 @@ expression returns [type]: t1 = term ( op = ( PLUS | MINUS ) t2 = term
 
 term returns [type]: f1 = factor ( op = ( TIMES | OVER | REM ) f2 = factor
     {if 1:
-        if   $op.type == JacParser.TIMES:
-            emit('    imul', -1)
-        elif $op.type == JacParser.OVER:
-            emit('    idiv', -1)
+        if $f1.type != $f2.type or $f1.type != 'i' or $f2.type != 'i':
+            sys.stderr.write('Error in term: operator cannot combine different types\n')
+            update_error()
         else:
-            emit('    irem', -1)
+            if $op.type == JacParser.TIMES:
+                emit('    imul', -1)
+            if $op.type == JacParser.OVER:
+                emit('    idiv', -1)
+            if $op.type == JacParser.REM:
+                emit('    irem', -1)
     }
     )*
     {if 1:
@@ -343,6 +515,7 @@ term returns [type]: f1 = factor ( op = ( TIMES | OVER | REM ) f2 = factor
 
 factor returns [type]: NUMBER 
     {if 1:
+        global symbol_table, function_table, function_error
         emit('    ldc ' + str($NUMBER.text), +1)
         $type = 'i'
     }
@@ -351,32 +524,53 @@ factor returns [type]: NUMBER
         emit('    ldc ' + str($STRING.text), +1)
         $type = 's'
     }
-    | OP_PAR e = expression CL_PAR
+    | OP_PAR e =  expression CL_PAR
     {if 1:
         $type = $e.type
+    }
+    | NAME OP_PAR ( arguments )? CL_PAR
+    {if 1:
+        global arg_max
+        I = ''
+        if $NAME.text+'I' in function_table:
+            currentType = 'I'
+        else:
+            currentType = 'V'
+        if $NAME.text+currentType in function_table:
+            if function_table[function_table.index($NAME.text+currentType)].endswith('V'):
+                update_error()
+                function_error = True
+                $type = 'void'
+            else:
+                for i in range(arg_max):
+                    I += 'I'
+                print('    invokestatic Test/' + $NAME.text + '(' + I + ')' + currentType)
+                $type = 'i'
     }
     | NAME
     {if 1:
         if $NAME.text not in symbol_table:
-            sys.stderr.write('Variable ' + $NAME.text + ' is not defined\n')
-            sys.exit(1)
-        elif symbol_type[symbol_table.index($NAME.text)] == 'i':
-            emit('    iload ' +  str(symbol_table.index($NAME.text)), +1)
-            used_table[symbol_table.index($NAME.text)] = True
-            $type = symbol_type[symbol_table.index($NAME.text)]
-        elif symbol_type[symbol_table.index($NAME.text)] == 's':
-            emit('    aload ' +  str(symbol_table.index($NAME.text)), +1)
-            used_table[symbol_table.index($NAME.text)] = True
-            $type = symbol_type[symbol_table.index($NAME.text)]
+            sys.stderr.write('Error in factor: Variable ' + $NAME.text + ' is not declared\n')
+            $type = 'error'
+            exit(1)
+        else:
+            if symbol_type[symbol_table.index($NAME.text)] == 'i':
+                emit('    iload ' +  str(symbol_table.index($NAME.text)), +1)
+                used_table[symbol_table.index($NAME.text)] = True
+                $type = symbol_type[symbol_table.index($NAME.text)]
+            elif symbol_type[symbol_table.index($NAME.text)] == 's':
+                emit('    aload ' +  str(symbol_table.index($NAME.text)), +1)
+                used_table[symbol_table.index($NAME.text)] = True
+                $type = symbol_type[symbol_table.index($NAME.text)]
     }
     | READINT OP_PAR CL_PAR
     {if 1:
-        emit('    invokestatic Runtime/readInt()I', +1)
+        emit('invokestatic Runtime/readInt()I', +1)
         $type = 'i'
     }
     | READSTR OP_PAR CL_PAR
     {if 1:
-        emit('    invokestatic Runtime/readString()Ljava/lang/String;', +1)
+        emit('invokestatic Runtime/readString()Ljava/lang/String;', +1)
         $type = 's'
     }
     ;
